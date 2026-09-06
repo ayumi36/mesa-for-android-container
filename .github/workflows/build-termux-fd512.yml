@@ -1,0 +1,87 @@
+name: Build native Termux FD512 Mesa
+
+on:
+  push:
+    branches:
+      - termux-fd512-legacy-ion
+    paths:
+      - .github/workflows/build-termux-fd512.yml
+      - .termux/mesa-build.sh
+      - src/freedreno/drm/kgsl/kgsl_bo.c
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: termux-fd512-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Android 10 aarch64 Termux package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out patched Mesa source
+        uses: actions/checkout@v4
+
+      - name: Prepare the proven lfdevs/xMeM Termux recipe
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/lfdevs/termux-packages.git termux-packages
+          git -C termux-packages checkout 8f165a1dddf9ae8e9d1c1608284a041813ab8fda
+          cp .termux/mesa-build.sh termux-packages/packages/mesa/build.sh
+          rm -f termux-packages/packages/mesa/mesa-opencl-icd-rusticl.subpackage.sh
+          rm -f termux-packages/packages/mesa/mesa-vulkan-icd-freedreno.subpackage.sh
+          rm -f termux-packages/packages/mesa/mesa-vulkan-icd-swrast.subpackage.sh
+
+      - name: Build Mesa for native Termux aarch64 API 29
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd termux-packages
+          ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 mesa
+
+      - name: Verify package ABI, KGSL, legacy ION, EGL and GLX
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts stage
+          find termux-packages/output -maxdepth 1 -type f -name 'mesa*.deb' -print -exec cp -v {} artifacts/ ;
+          runtime_deb=$(find artifacts -maxdepth 1 -type f -name 'mesa_*_aarch64.deb' | head -n1)
+          test -n "$runtime_deb"
+          test "$(dpkg-deb -f "$runtime_deb" Architecture)" = aarch64
+          dpkg-deb -x "$runtime_deb" stage
+
+          prefix=stage/data/data/com.termux/files/usr
+          test -e "$prefix/lib/dri/kgsl_dri.so"
+          test -e "$prefix/lib/libEGL_mesa.so"
+          test -e "$prefix/lib/libGLX_mesa.so"
+          dri=$(readlink -f "$prefix/lib/dri/kgsl_dri.so")
+          test -f "$dri"
+
+          file "$dri" | tee artifacts/VERIFY.txt
+          readelf -h "$dri" | tee -a artifacts/VERIFY.txt
+          readelf -d "$dri" | tee -a artifacts/VERIFY.txt
+          readelf --version-info "$dri" | tee -a artifacts/VERIFY.txt
+          strings "$dri" | grep -E '(/dev/kgsl-3d0|freedreno/kgsl)' | tee -a artifacts/VERIFY.txt
+          strings "$dri" | grep -F 'freedreno/kgsl: dma-buf allocator: legacy ION' | tee -a artifacts/VERIFY.txt
+          file "$dri" | grep -F 'ARM aarch64'
+          readelf -h "$dri" | grep -F 'AArch64'
+          ! readelf --version-info "$dri" | grep -q 'GLIBC_'
+          readelf -d "$dri" | grep -F '/data/data/com.termux/files/usr'
+
+          printf '%s
+'             'Mesa source base: 9452d1daece53b576a90c77b046cb5c3e2ec590d'             'Legacy ION source commit: 87e441410517948be65a77f51e4d57e4a4db7f80'             'Termux recipe base: lfdevs/termux-packages@8f165a1dddf9ae8e9d1c1608284a041813ab8fda'             'Target: native Termux/Bionic aarch64, Android API 29'             'Gallium driver: Freedreno; KMD: KGSL; platforms: X11, Wayland; GLX: DRI; EGL: X11/surfaceless capable'             > artifacts/BUILD-INFO.txt
+          (cd artifacts && sha256sum *.deb > SHA256SUMS)
+
+      - name: Upload native Termux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-termux-fd512-api29-aarch64
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
