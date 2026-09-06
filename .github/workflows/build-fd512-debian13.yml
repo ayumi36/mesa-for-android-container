@@ -1,0 +1,119 @@
+name: Build FD512 legacy ION Debian 13
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debian-trixie-arm64:
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: debian:trixie-slim
+      options: --privileged --user root
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+          apt update
+          apt build-dep -y mesa
+          apt install -y git ccache libxfixes-dev libarchive-dev file
+
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: /root/.ccache
+          key: ccache-fd512-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-fd512-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Configure ccache
+        run: |
+          export CCACHE_DIR=/root/.ccache
+          ccache --max-size=2G
+          ccache --zero-stats
+          ccache --show-stats
+
+      - name: Clone selected branch
+        run: |
+          cd ~
+          git clone --branch "${{ github.ref_name }}" --depth 10 "${{ github.server_url }}/${{ github.repository }}.git"
+
+      - name: Verify exact 26.2 base and legacy ION patch
+        shell: bash
+        run: |
+          cd ~/mesa-for-android-container
+          base=9452d1daece53b576a90c77b046cb5c3e2ec590d
+          test "$(git merge-base HEAD "$base")" = "$base"
+          changed=$(git diff --name-only "$base"...HEAD | sort)
+          expected=$(printf '%s\n%s' \
+            '.github/workflows/build-fd512-debian13.yml' \
+            'src/freedreno/drm/kgsl/kgsl_bo.c')
+          test "$changed" = "$expected"
+          grep -q 'ION_IOC_SHARE' src/freedreno/drm/kgsl/kgsl_bo.c
+          grep -q 'dma-buf allocator: legacy ION' src/freedreno/drm/kgsl/kgsl_bo.c
+          grep -q 'kgsl_bo->bo_type != KGSL_BO_IMPORT' src/freedreno/drm/kgsl/kgsl_bo.c
+
+      - name: Set artifact name
+        shell: bash
+        run: |
+          cd ~/mesa-for-android-container
+          version=$(grep -v '^[[:space:]]*$' VERSION | head -n1)
+          test "$version" = "26.2.0-devel"
+          echo "MESA_RELEASE_NAME_SUFFIX=26.2.0-devel-20260709_fd512_legacy_ion_debian_trixie_arm64" >> "$GITHUB_ENV"
+
+      - name: Build Mesa
+        shell: bash
+        run: |
+          export CCACHE_DIR=/root/.ccache
+          cd ~/mesa-for-android-container
+          meson setup build/ \
+            --prefix=/usr \
+            -Dplatforms=x11,wayland \
+            -Dgallium-drivers=freedreno,zink,virgl,llvmpipe \
+            -Dgallium-va=disabled \
+            -Dgallium-mediafoundation=disabled \
+            -Dvulkan-drivers=freedreno \
+            -Dvulkan-layers= \
+            -Degl=enabled \
+            -Dgles2=enabled \
+            -Dglvnd=enabled \
+            -Dglx=dri \
+            -Dlibunwind=disabled \
+            -Dintel-rt=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dvalgrind=disabled \
+            -Dgles1=disabled \
+            -Dfreedreno-kmds=kgsl \
+            -Dbuildtype=release
+          ninja -C build/
+
+      - name: Save ccache
+        uses: actions/cache/save@v5
+        if: always()
+        with:
+          path: /root/.ccache
+          key: ccache-fd512-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Package Mesa
+        shell: bash
+        run: |
+          cd ~/mesa-for-android-container
+          install_root=$(mktemp -d)
+          DESTDIR="$install_root" meson install -C build/
+          find "$install_root" -type f -name '*_dri.so' -exec file {} +
+          tar -zcf "mesa-for-android-container_${MESA_RELEASE_NAME_SUFFIX}.tar.gz" -C "$install_root" .
+          rm -rf "$install_root"
+          sha256sum "mesa-for-android-container_${MESA_RELEASE_NAME_SUFFIX}.tar.gz" > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mesa-for-android-container_${{ env.MESA_RELEASE_NAME_SUFFIX }}
+          path: |
+            ~/mesa-for-android-container/*.tar.gz
+            ~/mesa-for-android-container/sha256sums.txt
+          retention-days: 90
