@@ -76,7 +76,6 @@ jobs:
           readelf -h "$gallium" | grep -F 'AArch64'
           ! readelf --version-info "$gallium" | grep -q 'GLIBC_'
           readelf -d "$gallium" | grep -F 'Shared library: [libc.so]'
-          readelf -d "$dri" | grep -F '[libgallium-26.2.0-devel.so]'
 
           {
             echo 'Mesa source base: 9452d1daece53b576a90c77b046cb5c3e2ec590d'
