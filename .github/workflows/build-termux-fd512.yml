@@ -74,8 +74,13 @@ jobs:
           ! readelf --version-info "$dri" | grep -q 'GLIBC_'
           readelf -d "$dri" | grep -F '/data/data/com.termux/files/usr'
 
-          printf '%s
-'             'Mesa source base: 9452d1daece53b576a90c77b046cb5c3e2ec590d'             'Legacy ION source commit: 87e441410517948be65a77f51e4d57e4a4db7f80'             'Termux recipe base: lfdevs/termux-packages@8f165a1dddf9ae8e9d1c1608284a041813ab8fda'             'Target: native Termux/Bionic aarch64, Android API 29'             'Gallium driver: Freedreno; KMD: KGSL; platforms: X11, Wayland; GLX: DRI; EGL: X11/surfaceless capable'             > artifacts/BUILD-INFO.txt
+          {
+            echo 'Mesa source base: 9452d1daece53b576a90c77b046cb5c3e2ec590d'
+            echo 'Legacy ION source commit: 87e441410517948be65a77f51e4d57e4a4db7f80'
+            echo 'Termux recipe base: lfdevs/termux-packages@8f165a1dddf9ae8e9d1c1608284a041813ab8fda'
+            echo 'Target: native Termux/Bionic aarch64, Android API 29'
+            echo 'Gallium driver: Freedreno; KMD: KGSL; platforms: X11, Wayland; GLX: DRI; EGL: X11/surfaceless capable'
+          } > artifacts/BUILD-INFO.txt
           (cd artifacts && sha256sum *.deb > SHA256SUMS)
 
       - name: Upload native Termux packages
