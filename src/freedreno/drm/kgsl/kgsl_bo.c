@@ -4,6 +4,11 @@
 
 #include <linux/dma-heap.h>
 
+#include "../../vulkan/ion/ion.h"
+#include "../../vulkan/ion/ion_4.19.h"
+
+#define KGSL_ION_SYSTEM_HEAP_MASK ((1U << 0) | (1U << 25))
+
 static uint64_t
 kgsl_bo_iova(struct fd_bo *bo)
 {
@@ -190,54 +195,105 @@ kgsl_bo_from_dmabuf(struct fd_device *dev, int fd)
 }
 
 static int
+legacy_ion_alloc(int ion_heap, uint64_t size)
+{
+   struct ion_allocation_data alloc_data = {
+      .len = size,
+      .align = 4096,
+      .heap_id_mask = KGSL_ION_SYSTEM_HEAP_MASK,
+      .flags = 0,
+      .handle = -1,
+   };
+
+   int ret = kgsl_pipe_safe_ioctl(ion_heap, ION_IOC_ALLOC, &alloc_data);
+   if (ret)
+      return -1;
+
+   struct ion_fd_data share_data = {
+      .handle = alloc_data.handle,
+      .fd = -1,
+   };
+
+   ret = kgsl_pipe_safe_ioctl(ion_heap, ION_IOC_SHARE, &share_data);
+   int saved_errno = errno;
+
+   struct ion_handle_data free_data = {
+      .handle = alloc_data.handle,
+   };
+   int free_ret =
+      kgsl_pipe_safe_ioctl(ion_heap, ION_IOC_FREE, &free_data);
+
+   if (ret) {
+      errno = saved_errno;
+      return -1;
+   }
+
+   if (free_ret) {
+      saved_errno = errno;
+      close(share_data.fd);
+      errno = saved_errno;
+      return -1;
+   }
+
+   mesa_logi_once("freedreno/kgsl: dma-buf allocator: legacy ION");
+   return share_data.fd;
+}
+
+static int
+ion_alloc(int ion_heap, uint64_t size)
+{
+   struct ion_new_allocation_data alloc_data = {
+      .len = size,
+      .heap_id_mask = KGSL_ION_SYSTEM_HEAP_MASK,
+      .flags = 0,
+      .fd = -1,
+   };
+
+   int ret =
+      kgsl_pipe_safe_ioctl(ion_heap, ION_IOC_NEW_ALLOC, &alloc_data);
+   if (!ret) {
+      mesa_logi_once("freedreno/kgsl: dma-buf allocator: modern ION");
+      return alloc_data.fd;
+   }
+
+   int saved_errno = errno;
+   if (saved_errno != ENOTTY && saved_errno != EINVAL)
+      return -1;
+
+   mesa_logi_once("freedreno/kgsl: modern ION allocation unsupported (%s); "
+                  "trying legacy ION", strerror(saved_errno));
+   return legacy_ion_alloc(ion_heap, size);
+}
+
+static int
 dma_heap_alloc(uint64_t size)
 {
-   int ret;
    int dma_heap = open("/dev/dma_heap/system", O_RDONLY);
 
    if (dma_heap < 0) {
       int ion_heap = open("/dev/ion", O_RDONLY);
-
       if (ion_heap < 0)
          return -1;
 
-      struct ion_allocation_data {
-         __u64 len;
-         __u32 heap_id_mask;
-         __u32 flags;
-         __u32 fd;
-         __u32 unused;
-      } alloc_data = {
-         .len = size,
-         /* ION_HEAP_SYSTEM | ION_SYSTEM_HEAP_ID */
-         .heap_id_mask = (1U << 0) | (1U << 25),
-         .flags = 0, /* uncached */
-      };
-
-      ret = kgsl_pipe_safe_ioctl(ion_heap, _IOWR('I', 0, struct ion_allocation_data),
-                      &alloc_data);
-
+      int fd = ion_alloc(ion_heap, size);
       close(ion_heap);
-
-      if (ret)
-         return -1;
-
-      return alloc_data.fd;
-   } else {
-      struct dma_heap_allocation_data alloc_data = {
-         .len = size,
-         .fd_flags = O_RDWR | O_CLOEXEC,
-      };
-
-      ret = kgsl_pipe_safe_ioctl(dma_heap, DMA_HEAP_IOCTL_ALLOC, &alloc_data);
-
-      close(dma_heap);
-
-      if (ret)
-         return -1;
-
-      return alloc_data.fd;
+      return fd;
    }
+
+   struct dma_heap_allocation_data alloc_data = {
+      .len = size,
+      .fd_flags = O_RDWR | O_CLOEXEC,
+   };
+
+   int ret =
+      kgsl_pipe_safe_ioctl(dma_heap, DMA_HEAP_IOCTL_ALLOC, &alloc_data);
+   close(dma_heap);
+
+   if (ret)
+      return -1;
+
+   mesa_logi_once("freedreno/kgsl: dma-buf allocator: dma-heap");
+   return alloc_data.fd;
 }
 
 static struct fd_bo *
