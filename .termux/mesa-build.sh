@@ -24,7 +24,6 @@ TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 --cmake-prefix-path $TERMUX_PREFIX
 -Dandroid-libbacktrace=disabled
 -Dbuild-tests=false
--Dbuildtype=release
 -Ddatasources=
 -Degl=enabled
 -Degl-native-platform=x11
