@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p artifacts stage
-          find termux-packages/output -maxdepth 1 -type f -name 'mesa*.deb' -print -exec cp -v {} artifacts/ ;
+          find termux-packages/output -maxdepth 1 -type f -name 'mesa*.deb' -print -exec cp -v '{}' artifacts/ +
           runtime_deb=$(find artifacts -maxdepth 1 -type f -name 'mesa_*_aarch64.deb' | head -n1)
           test -n "$runtime_deb"
           test "$(dpkg-deb -f "$runtime_deb" Architecture)" = aarch64
@@ -61,18 +61,22 @@ jobs:
           test -e "$prefix/lib/libEGL_mesa.so"
           test -e "$prefix/lib/libGLX_mesa.so"
           dri=$(readlink -f "$prefix/lib/dri/kgsl_dri.so")
+          gallium=$(find "$prefix/lib" -maxdepth 1 -type f -name 'libgallium*.so' -print -quit)
           test -f "$dri"
+          test -f "$gallium"
 
-          file "$dri" | tee artifacts/VERIFY.txt
-          readelf -h "$dri" | tee -a artifacts/VERIFY.txt
+          file "$dri" "$gallium" | tee artifacts/VERIFY.txt
+          readelf -h "$gallium" | tee -a artifacts/VERIFY.txt
           readelf -d "$dri" | tee -a artifacts/VERIFY.txt
-          readelf --version-info "$dri" | tee -a artifacts/VERIFY.txt
-          strings "$dri" | grep -E '(/dev/kgsl-3d0|freedreno/kgsl)' | tee -a artifacts/VERIFY.txt
-          strings "$dri" | grep -F 'freedreno/kgsl: dma-buf allocator: legacy ION' | tee -a artifacts/VERIFY.txt
-          file "$dri" | grep -F 'ARM aarch64'
-          readelf -h "$dri" | grep -F 'AArch64'
-          ! readelf --version-info "$dri" | grep -q 'GLIBC_'
-          readelf -d "$dri" | grep -F '/data/data/com.termux/files/usr'
+          readelf -d "$gallium" | tee -a artifacts/VERIFY.txt
+          readelf --version-info "$gallium" | tee -a artifacts/VERIFY.txt
+          strings "$gallium" | grep -E '(/dev/kgsl-3d0|freedreno/kgsl)' | tee -a artifacts/VERIFY.txt
+          strings "$gallium" | grep -F 'freedreno/kgsl: dma-buf allocator: legacy ION' | tee -a artifacts/VERIFY.txt
+          file "$gallium" | grep -F 'ARM aarch64'
+          readelf -h "$gallium" | grep -F 'AArch64'
+          ! readelf --version-info "$gallium" | grep -q 'GLIBC_'
+          readelf -d "$gallium" | grep -F 'Shared library: [libc.so]'
+          readelf -d "$dri" | grep -F '[libgallium-26.2.0-devel.so]'
 
           {
             echo 'Mesa source base: 9452d1daece53b576a90c77b046cb5c3e2ec590d'
