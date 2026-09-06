@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p artifacts stage
-          find termux-packages/output -maxdepth 1 -type f -name 'mesa*.deb' -print -exec cp -v '{}' artifacts/ +
+          cp -v termux-packages/output/mesa*.deb artifacts/
           runtime_deb=$(find artifacts -maxdepth 1 -type f -name 'mesa_*_aarch64.deb' | head -n1)
           test -n "$runtime_deb"
           test "$(dpkg-deb -f "$runtime_deb" Architecture)" = aarch64
